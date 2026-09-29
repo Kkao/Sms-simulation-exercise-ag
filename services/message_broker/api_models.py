@@ -3,8 +3,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from services.message_broker.broker import EnqueueStatus
-from shared import MessageType
+from services.message_broker.broker import MAX_BATCH_SIZE, EnqueueStatus
+from shared import MessageType, SmsMessage
+
+BatchMessages = Annotated[
+    list[SmsMessage], Field(min_length=1, max_length=MAX_BATCH_SIZE)
+]
 
 
 class ClaimRequest(BaseModel):

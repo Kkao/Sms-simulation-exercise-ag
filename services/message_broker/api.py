@@ -4,6 +4,7 @@ import os
 from fastapi import FastAPI, HTTPException, Response, status
 
 from services.message_broker.api_models import (
+    BatchMessages,
     ClaimRequest,
     EnqueueResponse,
     ErrorResponse,
@@ -57,6 +58,40 @@ def create_app(*, capacity: int | None = None) -> FastAPI:
             message_id=message.message_id,
             message_type=message.message_type,
         )
+
+    @app.post(
+        "/messages/batch",
+        status_code=status.HTTP_202_ACCEPTED,
+        response_model=list[EnqueueResponse],
+        responses={
+            409: {
+                "model": ErrorResponse,
+                "description": "Conflicting message IDs; batch rejected",
+            },
+            503: {
+                "model": ErrorResponse,
+                "description": "Insufficient capacity; batch rejected",
+            },
+        },
+    )
+    async def enqueue_batch(messages: BatchMessages) -> list[EnqueueResponse]:
+        """Accept an array of messages and return receipts in the same order."""
+        try:
+            results = broker.enqueue_many(messages)
+        except DuplicateMessageError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except BrokerQueueFull as error:
+            raise HTTPException(
+                status_code=503, detail=str(error), headers={"Retry-After": "1"}
+            ) from error
+        return [
+            EnqueueResponse(
+                status=result,
+                message_id=message.message_id,
+                message_type=message.message_type,
+            )
+            for message, result in zip(messages, results, strict=True)
+        ]
 
     @app.post(
         "/messages/claim",

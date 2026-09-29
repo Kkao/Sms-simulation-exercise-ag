@@ -8,6 +8,8 @@ from uuid import UUID, uuid4
 from shared import BrokerAttempt, MessageType, SmsMessage
 from shared.validation import validate_utc_timestamp
 
+MAX_BATCH_SIZE = 1000
+
 
 class EnqueueStatus(str, Enum):
     ACCEPTED = "accepted"
@@ -60,31 +62,47 @@ class MessageBroker:
         Raises DuplicateMessageError for conflicting content and BrokerQueueFull
         when capacity is exhausted.
         """
-        message = SmsMessage.model_validate(message)
-        key = message.message_id
-        previous = self._accepted.get(key)
-        if previous is not None:
-            if previous != message:
-                raise DuplicateMessageError(
-                    "message_id already accepted with different content"
-                )
-            return EnqueueStatus.DUPLICATE
+        return self.enqueue_many([message])[0]
 
-        if self.pending_count >= self._capacity:
+    def enqueue_many(self, messages: list[SmsMessage]) -> list[EnqueueStatus]:
+        """Admit a batch of messages, returning one status per input in order."""
+        if not 1 <= len(messages) <= MAX_BATCH_SIZE:
+            raise ValueError(f"batch must contain 1 to {MAX_BATCH_SIZE} messages")
+        validated = [SmsMessage.model_validate(message) for message in messages]
+        new_messages: dict[UUID, SmsMessage] = {}
+        statuses: list[EnqueueStatus] = []
+        for message in validated:
+            key = message.message_id
+            previous = self._accepted.get(key) or new_messages.get(key)
+            if previous is not None:
+                if previous != message:
+                    raise DuplicateMessageError(
+                        f"message_id {key} already accepted or repeated with different content"
+                    )
+                statuses.append(EnqueueStatus.DUPLICATE)
+            else:
+                new_messages[key] = message
+                statuses.append(EnqueueStatus.ACCEPTED)
+
+        if self.pending_count + len(new_messages) > self._capacity:
             raise BrokerQueueFull("broker queue is full")
 
+        entries = [self._prepare_attempt(message) for message in new_messages.values()]
+        for entry in entries:
+            queue = self._queues.setdefault(entry.message.message_type, deque())
+            queue.append(entry)
+            self._accepted[entry.message.message_id] = entry.message
+        return statuses
+
+    def _prepare_attempt(self, message: SmsMessage) -> _QueuedAttempt:
         attempt_id = self._id_factory()
         if not isinstance(attempt_id, UUID):
             raise ValueError("id_factory must return a UUID")
-        entry = _QueuedAttempt(
+        return _QueuedAttempt(
             message=message,
             attempt_id=attempt_id,
             enqueued_at=validate_utc_timestamp(self._clock()),
         )
-        queue = self._queues.setdefault(message.message_type, deque())
-        queue.append(entry)
-        self._accepted[key] = message
-        return EnqueueStatus.ACCEPTED
 
     def claim(self, message_type: MessageType) -> BrokerAttempt | None:
         """

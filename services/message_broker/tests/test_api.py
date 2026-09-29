@@ -83,6 +83,47 @@ def test_enqueue_handler_propagates_unexpected_failures(
         asyncio.run(endpoint(app, "/messages")(message))
 
 
+def test_batch_handler_returns_ordered_receipts(
+    app: FastAPI,
+    fake_broker: Mock,
+    message: SmsMessage,
+) -> None:
+    fake_broker.enqueue_many.return_value = [
+        EnqueueStatus.ACCEPTED,
+        EnqueueStatus.DUPLICATE,
+    ]
+    response = asyncio.run(endpoint(app, "/messages/batch")([message, message]))
+    assert [item.status for item in response] == [
+        EnqueueStatus.ACCEPTED,
+        EnqueueStatus.DUPLICATE,
+    ]
+    assert all(item.message_id == message.message_id for item in response)
+    fake_broker.enqueue_many.assert_called_once_with([message, message])
+    fake_broker.enqueue.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "error, code, headers",
+    [
+        (DuplicateMessageError("conflict"), 409, None),
+        (BrokerQueueFull("full"), 503, {"Retry-After": "1"}),
+    ],
+)
+def test_batch_handler_maps_rejections(
+    app: FastAPI,
+    fake_broker: Mock,
+    message: SmsMessage,
+    error: Exception,
+    code: int,
+    headers: dict[str, str] | None,
+) -> None:
+    fake_broker.enqueue_many.side_effect = error
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(endpoint(app, "/messages/batch")([message]))
+    assert caught.value.status_code == code
+    assert caught.value.headers == headers
+
+
 def test_empty_claim_handler_returns_bodyless_response(
     app: FastAPI, fake_broker: Mock, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -142,3 +183,83 @@ def test_health_handler_reports_current_pending_count(
     assert response.model_dump() == {"status": "ok", "pending_messages": pending}
     fake_broker.enqueue.assert_not_called()
     fake_broker.claim.assert_not_called()
+
+
+def test_batch_preserves_fifo_and_prepares_one_attempt_per_new_message(
+    broker: MessageBroker,
+    message: SmsMessage,
+    id_factory: Mock,
+) -> None:
+    second = message.model_copy(update={"message_id": UUID(int=2)})
+    assert broker.enqueue_many([message, second, message]) == [
+        EnqueueStatus.ACCEPTED,
+        EnqueueStatus.ACCEPTED,
+        EnqueueStatus.DUPLICATE,
+    ]
+    assert broker.pending_count == 2
+    assert id_factory.call_count == 2
+    attempts = [broker.claim("sms_message"), broker.claim("sms_message")]
+    assert [attempt.message for attempt in attempts] == [message, second]
+    assert [attempt.attempt_id for attempt in attempts] == [
+        UUID(int=101),
+        UUID(int=102),
+    ]
+    assert all(attempt.attempt_number == 1 for attempt in attempts)
+    assert broker.enqueue_many([message, second]) == [EnqueueStatus.DUPLICATE] * 2
+    assert broker.pending_count == 0
+
+
+def test_batch_capacity_rejection_is_atomic_and_retryable(
+    broker: MessageBroker,
+    message: SmsMessage,
+    clock: Mock,
+    id_factory: Mock,
+) -> None:
+    broker.enqueue(message)
+    new = [message.model_copy(update={"message_id": UUID(int=i)}) for i in (2, 3)]
+    clock.reset_mock()
+    id_factory.reset_mock()
+    with pytest.raises(BrokerQueueFull):
+        broker.enqueue_many(new)
+    assert broker.pending_count == 1
+    clock.assert_not_called()
+    id_factory.assert_not_called()
+    assert broker.claim("sms_message").message == message
+    assert broker.enqueue_many(new) == [EnqueueStatus.ACCEPTED] * 2
+    assert [broker.claim("sms_message").message for _ in new] == new
+
+
+@pytest.mark.parametrize("already_accepted", [False, True])
+def test_conflict_rejects_entire_batch(
+    broker: MessageBroker,
+    message: SmsMessage,
+    already_accepted: bool,
+) -> None:
+    if already_accepted:
+        broker.enqueue(message)
+    new = message.model_copy(update={"message_id": UUID(int=2)})
+    conflict = message.model_copy(update={"body": "Different"})
+    with pytest.raises(DuplicateMessageError):
+        broker.enqueue_many([new, message, conflict])
+    assert broker.pending_count == int(already_accepted)
+    assert broker.enqueue(new) is EnqueueStatus.ACCEPTED
+
+
+def test_invalid_later_message_does_not_admit_valid_prefix(
+    broker: MessageBroker,
+    message: SmsMessage,
+) -> None:
+    invalid = message.model_copy(update={"message_id": UUID(int=2), "body": "x" * 101})
+    with pytest.raises(ValueError):
+        broker.enqueue_many([message, invalid])
+    assert broker.pending_count == 0
+    assert broker.enqueue(message) is EnqueueStatus.ACCEPTED
+
+
+@pytest.mark.parametrize("size", [0, 1001])
+def test_invalid_batch_sizes(
+    broker: MessageBroker, message: SmsMessage, size: int
+) -> None:
+    with pytest.raises(ValueError, match="1 to 1000"):
+        broker.enqueue_many([message] * size)
+    assert broker.pending_count == 0

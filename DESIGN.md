@@ -34,29 +34,6 @@
 3. The message broker assigns one queued message with attempt metadata to an available sender
 4. The sender service calls the metrics aggregator service with metrics regarding each service
 
-### Message broker HTTP API
-
-Run one FastAPI application with one server worker and one shared broker instance.
-All broker operations execute directly in `async def` handlers without yielding
-during state updates.
-
-* `POST /messages` accepts the SMS schema below. It returns `202` with `status`
-  (`accepted` or `duplicate`), `message_id`, and `message_type`. Conflicting reuse
-  of identifiers returns `409`; a full queue returns `503` with `Retry-After: 1`.
-* `POST /messages/claim` accepts `{"sender_id": "sender-1", "message_type": "sms_message"}`
-  and returns `200` with the broker attempt schema below, or `204` with no body
-  when that type's queue is absent or empty. The producer's validated message
-  type determines the destination queue; claiming selects that queue directly.
-  Sender IDs are for log correlation; claiming does not establish a tracked lease.
-* `GET /health` returns `200` with `status: "ok"` and `pending_messages`. This is
-  an availability check, not a delivery-completion or shutdown-readiness check.
-* Invalid request payloads, including missing or unsupported message types, return
-  `422`. Only `sms_message` is supported by the contracts today. The broker's queue
-  registry is keyed by type, ready for additional validated message contracts.
-  Senders poll only when idle and wait
-  between empty responses. Claims remove work immediately without acknowledgments
-  or recovery if a response is lost.
-
 ### Libraries used
 For this design, everything is written in Python and can be run locally. 
 
