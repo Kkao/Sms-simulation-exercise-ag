@@ -8,8 +8,16 @@ import httpx
 import pytest
 
 from services.producer import ProducerConfig
+from services.producer import client as client_module
 from services.producer.client import BrokerClient, SubmissionError
 from shared import SmsMessage
+
+
+@pytest.fixture
+def sleep(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    fake_sleep = AsyncMock()
+    monkeypatch.setattr(client_module, "sleep", fake_sleep)
+    return fake_sleep
 
 
 def message(number: int = 1, body: str = "") -> SmsMessage:
@@ -23,10 +31,12 @@ def message(number: int = 1, body: str = "") -> SmsMessage:
 
 
 @pytest.mark.parametrize("status", ["accepted", "duplicate"])
-def test_full_queue_retries_identical_payload_until_confirmed(status: str) -> None:
+def test_full_queue_retries_identical_payload_until_confirmed(
+    status: str,
+    sleep: AsyncMock,
+) -> None:
     sms = message()
     requests = []
-    sleep = AsyncMock()
 
     def handle(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -43,9 +53,7 @@ def test_full_queue_retries_identical_payload_until_confirmed(status: str) -> No
 
     async def scenario() -> None:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
-            await BrokerClient(
-                client, ProducerConfig(max_retries=2), sleep=sleep
-            ).submit(sms)
+            await BrokerClient(client, ProducerConfig(max_retries=2)).submit(sms)
 
     asyncio.run(scenario())
     assert len(requests) == 3
@@ -58,7 +66,12 @@ def test_full_queue_retries_identical_payload_until_confirmed(status: str) -> No
     "status, retries, calls",
     [(409, 3, 1), (422, 3, 1), (500, 3, 1), (503, 0, 1), (503, 2, 3), (200, 3, 1)],
 )
-def test_failures_are_explicit_and_retries_bounded(status, retries, calls) -> None:
+def test_failures_are_explicit_and_retries_bounded(
+    status: int,
+    retries: int,
+    calls: int,
+    sleep: AsyncMock,
+) -> None:
     requests = []
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -68,12 +81,13 @@ def test_failures_are_explicit_and_retries_bounded(status, retries, calls) -> No
     async def scenario() -> None:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
             with pytest.raises(SubmissionError):
-                await BrokerClient(
-                    client, ProducerConfig(max_retries=retries), sleep=AsyncMock()
-                ).submit(message())
+                await BrokerClient(client, ProducerConfig(max_retries=retries)).submit(
+                    message()
+                )
 
     asyncio.run(scenario())
     assert len(requests) == calls
+    assert sleep.await_count == calls - 1
 
 
 @pytest.mark.parametrize(
@@ -119,8 +133,10 @@ def test_transport_failures_are_not_retried(error: Exception) -> None:
 
 
 @pytest.mark.parametrize("header", ["bad", "-1", "61"])
-def test_unsupported_retry_after_fails_without_sleeping(header: str) -> None:
-    sleep = AsyncMock()
+def test_unsupported_retry_after_fails_without_sleeping(
+    header: str,
+    sleep: AsyncMock,
+) -> None:
 
     async def scenario() -> None:
         transport = httpx.MockTransport(
@@ -128,9 +144,7 @@ def test_unsupported_retry_after_fails_without_sleeping(header: str) -> None:
         )
         async with httpx.AsyncClient(transport=transport) as client:
             with pytest.raises(SubmissionError, match="Retry-After"):
-                await BrokerClient(client, ProducerConfig(), sleep=sleep).submit(
-                    message()
-                )
+                await BrokerClient(client, ProducerConfig()).submit(message())
 
     asyncio.run(scenario())
     sleep.assert_not_awaited()
@@ -154,9 +168,9 @@ def receipts(messages: list[SmsMessage]) -> list[dict]:
 
 def test_retry_preserves_complete_batch_and_accepts_duplicate_receipts(
     messages: list[SmsMessage],
+    sleep: AsyncMock,
 ) -> None:
     requests = []
-    sleep = AsyncMock()
     response_body = receipts(messages)
     response_body[1]["status"] = "duplicate"
 
@@ -168,9 +182,7 @@ def test_retry_preserves_complete_batch_and_accepts_duplicate_receipts(
 
     async def scenario() -> None:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-            await BrokerClient(http, ProducerConfig(), sleep=sleep).submit_batch(
-                messages
-            )
+            await BrokerClient(http, ProducerConfig()).submit_batch(messages)
 
     asyncio.run(scenario())
     assert len(requests) == 2

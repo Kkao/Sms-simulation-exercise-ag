@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Awaitable, Callable
+from asyncio import sleep
 
 import httpx
 
@@ -16,12 +16,9 @@ class BrokerClient:
         self,
         client: httpx.AsyncClient,
         config: ProducerConfig,
-        *,
-        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.client = client
         self.config = config
-        self.sleep = sleep
 
     async def submit(self, message: SmsMessage) -> None:
         """Confirm admission, retrying only explicit queue-full responses."""
@@ -72,7 +69,7 @@ class BrokerClient:
                     raise ValueError
             except ValueError as error:
                 raise SubmissionError("Unsupported broker Retry-After value") from error
-            await self.sleep(max(1, delay))
+            await sleep(max(1, delay))
 
     @staticmethod
     def _validate_receipt(receipt: object, message: SmsMessage) -> None:
