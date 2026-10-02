@@ -6,6 +6,7 @@ import logging
 import uvicorn
 
 from services.message_broker.api import create_app
+from shared.logging import suppress_routine_request_logs
 
 
 def main() -> None:
@@ -26,6 +27,7 @@ def main() -> None:
         parser.error("--capacity must be a positive integer")
 
     logging.basicConfig(level=logging.INFO)
+    suppress_routine_request_logs()
     app = create_app(capacity=args.capacity)
     logging.getLogger(__name__).info(
         "Interactive API docs: http://127.0.0.1:%s/docs", args.port

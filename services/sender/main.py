@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from services.sender.client import SenderClient
 from services.sender.config import SenderConfig
 from services.sender.sender import SenderServiceError, run_senders
+from shared.logging import suppress_routine_request_logs
 
 
 async def run(config: SenderConfig) -> int:
@@ -37,6 +38,7 @@ def main(argv: list[str] | None = None) -> None:
     except ValidationError as error:
         parser.error(str(error))
     logging.basicConfig(level=logging.INFO)
+    suppress_routine_request_logs()
     try:
         asyncio.run(run(config))
     except SenderServiceError as error:
