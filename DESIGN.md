@@ -25,14 +25,20 @@
 * Each sender has a configurable failure rate
 
 **Metrics Aggregator**
-* Stores metrics from any source
+* Stores metrics from the sender service.
 * Provides APIs to query metrics
 
 ### Example flow
 1. Producer generates sms messages and calls the message broker API
 2. The message broker queues the incoming messages
 3. The message broker assigns one queued message with attempt metadata to an available sender
-4. The sender service calls the metrics aggregator service with metrics regarding each service
+4. The sender service calls the metrics aggregator service with metrics about the sms message
+
+### How the design supports maximum concurrency and throughput
+By splitting out each service separately, each service can independently scale as needed.
+For example, the number of producers can be increased to call the message broker. 
+The message broker can support multiple or larger queues. The sender service can launch more
+individual senders. 
 
 ### Libraries used
 For this design, everything is written in Python and can be run locally. 
@@ -128,6 +134,7 @@ After processing an attempt, the sender reports its outcome to the metrics aggre
   "occurred_at": "2026-09-26T14:30:00.400Z",
   "status": "failed",
   "processing_duration_ms": 250,
+  "total_latency_ms": 277,
   "error_code": "SIMULATED_SEND_FAILURE"
 }
 ```
@@ -144,4 +151,5 @@ After processing an attempt, the sender reports its outcome to the metrics aggre
 | `occurred_at` | UTC timestamp string | Time the sending attempt finished. |
 | `status` | String | Either `sent` or `failed`, describing this attempt's outcome. |
 | `processing_duration_ms` | Nonnegative number | Elapsed processing time in milliseconds, including the simulated sending delay. |
+| `total_latency_ms` | Nonnegative number or null | End-to-end elapsed time from the message's `created_at` timestamp until the attempt completed. This field is optional for compatibility with earlier clients; `null` means no latency sample is available. |
 | `error_code` | String or null | Failure reason, such as `SIMULATED_SEND_FAILURE`; `null` on success. |
