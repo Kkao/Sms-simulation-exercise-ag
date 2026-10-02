@@ -47,6 +47,9 @@ class SenderResult(_Contract):
     processing_duration_ms: Annotated[
         float, Field(strict=True, ge=0, allow_inf_nan=False)
     ]
+    total_latency_ms: (
+        Annotated[float, Field(strict=True, ge=0, allow_inf_nan=False)] | None
+    ) = None
     error_code: Annotated[str, Field(strict=True, min_length=1)] | None
 
     @model_validator(mode="after")
