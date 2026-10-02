@@ -23,6 +23,8 @@
 * Creates a configurable number of individual senders
 * Each sender waits a random time before sending (with a configurable mean)
 * Each sender has a configurable failure rate
+* The sender simulates the wait time before the sender determines whether
+to randomly fail the message. 
 
 **Metrics Aggregator**
 * Stores metrics from the sender service.
