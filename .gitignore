@@ -6,3 +6,6 @@ __pycache__/
 .ruff_cache/
 build/
 dist/
+metrics.sqlite3
+metrics.sqlite3-shm
+metrics.sqlite3-wal
