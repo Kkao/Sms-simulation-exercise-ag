@@ -31,6 +31,10 @@ class MetricsSummary(_Response):
     average_processing_duration_ms: Annotated[float, Field(ge=0)]
     p90_processing_duration_ms: Annotated[float, Field(ge=0)]
     p99_processing_duration_ms: Annotated[float, Field(ge=0)]
+    total_latency_sample_count: Annotated[int, Field(ge=0)]
+    average_total_latency_ms: Annotated[float, Field(ge=0)] | None
+    p90_total_latency_ms: Annotated[float, Field(ge=0)] | None
+    p99_total_latency_ms: Annotated[float, Field(ge=0)] | None
     sender_count: Annotated[int, Field(ge=0)]
     latest_occurred_at: datetime | None
 

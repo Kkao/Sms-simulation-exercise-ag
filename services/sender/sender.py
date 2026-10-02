@@ -31,6 +31,10 @@ async def process_attempt(
     await sleep(rng.uniform(0, 2 * config.mean_delay))
     failed = rng.random() < config.failure_rate
     duration = (monotonic() - started) * 1000
+    occurred_at = datetime.now(UTC)
+    total_latency = (occurred_at - attempt.message.created_at).total_seconds() * 1000
+    if total_latency < 0:
+        raise ValueError("message created_at is later than the completion time")
     return SenderResult(
         schema_version=1,
         message_type=attempt.message_type,
@@ -39,9 +43,10 @@ async def process_attempt(
         message_id=attempt.message.message_id,
         attempt_id=attempt.attempt_id,
         sender_id=sender_id,
-        occurred_at=datetime.now(UTC),
+        occurred_at=occurred_at,
         status="failed" if failed else "sent",
         processing_duration_ms=duration,
+        total_latency_ms=total_latency,
         error_code="SIMULATED_SEND_FAILURE" if failed else None,
     )
 

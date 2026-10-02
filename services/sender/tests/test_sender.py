@@ -1,6 +1,6 @@
 import asyncio
 import random
-from datetime import UTC
+from datetime import UTC, timedelta
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID
 
@@ -39,7 +39,7 @@ def test_processing_preserves_metadata_and_measures_elapsed_time(
     rng.random.return_value = draw
     sleep = AsyncMock()
     datetime = Mock()
-    datetime.now.return_value = attempt.dispatched_at
+    datetime.now.return_value = attempt.message.created_at + timedelta(seconds=1.5)
     monkeypatch.setattr(sender_module, "sleep", sleep)
     monkeypatch.setattr(sender_module, "monotonic", Mock(side_effect=[10, 10.25]))
     monkeypatch.setattr(sender_module, "datetime", datetime)
@@ -65,8 +65,30 @@ def test_processing_preserves_metadata_and_measures_elapsed_time(
     assert result.message_type == attempt.message_type
     assert result.event_id == UUID(int=9)
     assert result.sender_id == "sender-test"
-    assert result.occurred_at == attempt.dispatched_at
+    assert result.occurred_at == attempt.message.created_at + timedelta(seconds=1.5)
+    assert result.total_latency_ms == 1500
     assert attempt.attempt_number == 2
+
+
+def test_processing_rejects_created_at_after_completion(
+    attempt: BrokerAttempt,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    datetime = Mock()
+    datetime.now.return_value = attempt.message.created_at - timedelta(milliseconds=1)
+    monkeypatch.setattr(sender_module, "sleep", AsyncMock())
+    monkeypatch.setattr(sender_module, "monotonic", Mock(side_effect=[10, 10]))
+    monkeypatch.setattr(sender_module, "datetime", datetime)
+
+    with pytest.raises(ValueError, match="created_at is later"):
+        asyncio.run(
+            process_attempt(
+                attempt,
+                "sender-test",
+                SenderConfig(mean_delay=0, failure_rate=0),
+                rng=Mock(uniform=Mock(return_value=0), random=Mock(return_value=0.5)),
+            )
+        )
 
 
 def test_processing_error_retains_attempt_without_claiming_again(

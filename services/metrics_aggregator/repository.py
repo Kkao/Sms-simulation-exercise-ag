@@ -53,10 +53,20 @@ class MetricsRepository:
                     processing_duration_ms REAL NOT NULL CHECK (
                         processing_duration_ms >= 0
                     ),
+                    total_latency_ms REAL CHECK (total_latency_ms >= 0),
                     error_code TEXT
                 )
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(metric_events)")
+            }
+            if "total_latency_ms" not in columns:
+                connection.execute(
+                    "ALTER TABLE metric_events ADD COLUMN "
+                    "total_latency_ms REAL CHECK (total_latency_ms >= 0)"
+                )
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS metric_events_occurred_at_idx
@@ -97,8 +107,8 @@ class MetricsRepository:
                 INSERT OR IGNORE INTO metric_events (
                     event_id, schema_version, message_type, event_type,
                     message_id, attempt_id, sender_id, occurred_at, status,
-                    processing_duration_ms, error_code
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    processing_duration_ms, total_latency_ms, error_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(event.event_id),
@@ -111,6 +121,7 @@ class MetricsRepository:
                     event.occurred_at.isoformat(),
                     event.status,
                     event.processing_duration_ms,
+                    event.total_latency_ms,
                     event.error_code,
                 ),
             )
@@ -154,6 +165,8 @@ class MetricsRepository:
                     COALESCE(SUM(status = 'sent'), 0) AS sent,
                     COALESCE(SUM(status = 'failed'), 0) AS failed,
                     COALESCE(AVG(processing_duration_ms), 0) AS average_duration,
+                    COUNT(total_latency_ms) AS total_latency_sample_count,
+                    AVG(total_latency_ms) AS average_total_latency,
                     COUNT(DISTINCT sender_id) AS sender_count,
                     MAX(occurred_at) AS latest_occurred_at
                 FROM metric_events
@@ -162,11 +175,29 @@ class MetricsRepository:
             total = int(row["total"])
             p90_duration = 0.0
             p99_duration = 0.0
+            latency_sample_count = int(row["total_latency_sample_count"])
+            p90_total_latency = None
+            p99_total_latency = None
             if total:
                 p90_rank = ceil(0.90 * total)
                 p99_rank = ceil(0.99 * total)
-                p90_duration = self._duration_at_rank(connection, p90_rank)
-                p99_duration = self._duration_at_rank(connection, p99_rank)
+                p90_duration = self._value_at_rank(
+                    connection, "processing_duration_ms", p90_rank
+                )
+                p99_duration = self._value_at_rank(
+                    connection, "processing_duration_ms", p99_rank
+                )
+            if latency_sample_count:
+                p90_total_latency = self._value_at_rank(
+                    connection,
+                    "total_latency_ms",
+                    ceil(0.90 * latency_sample_count),
+                )
+                p99_total_latency = self._value_at_rank(
+                    connection,
+                    "total_latency_ms",
+                    ceil(0.99 * latency_sample_count),
+                )
         failed = int(row["failed"])
         return MetricsSummary(
             total=total,
@@ -176,6 +207,14 @@ class MetricsRepository:
             average_processing_duration_ms=float(row["average_duration"]),
             p90_processing_duration_ms=p90_duration,
             p99_processing_duration_ms=p99_duration,
+            total_latency_sample_count=latency_sample_count,
+            average_total_latency_ms=(
+                float(row["average_total_latency"])
+                if row["average_total_latency"] is not None
+                else None
+            ),
+            p90_total_latency_ms=p90_total_latency,
+            p99_total_latency_ms=p99_total_latency,
             sender_count=int(row["sender_count"]),
             latest_occurred_at=row["latest_occurred_at"],
         )
@@ -187,15 +226,17 @@ class MetricsRepository:
             )
 
     @staticmethod
-    def _duration_at_rank(connection: sqlite3.Connection, rank: int) -> float:
-        """Find the processing time at the requested place in the sorted results."""
+    def _value_at_rank(
+        connection: sqlite3.Connection,
+        column: Literal["processing_duration_ms", "total_latency_ms"],
+        rank: int,
+    ) -> float:
+        """Find a duration at the requested place in its non-null values."""
+        if column not in {"processing_duration_ms", "total_latency_ms"}:
+            raise ValueError("unsupported duration column")
         row = connection.execute(
-            """
-            SELECT processing_duration_ms
-            FROM metric_events
-            ORDER BY processing_duration_ms ASC
-            LIMIT 1 OFFSET ?
-            """,
+            f"SELECT {column} FROM metric_events "
+            f"WHERE {column} IS NOT NULL ORDER BY {column} ASC LIMIT 1 OFFSET ?",
             (rank - 1,),
         ).fetchone()
         return float(row[0])
@@ -214,5 +255,6 @@ class MetricsRepository:
             occurred_at=datetime.fromisoformat(row["occurred_at"]),
             status=row["status"],
             processing_duration_ms=row["processing_duration_ms"],
+            total_latency_ms=row["total_latency_ms"],
             error_code=row["error_code"],
         )

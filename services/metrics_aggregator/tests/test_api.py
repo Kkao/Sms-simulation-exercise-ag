@@ -35,6 +35,10 @@ def test_ingestion_queries_health_and_dashboard(
             assert summary["sent"] == 1
             assert summary["p90_processing_duration_ms"] == 125
             assert summary["p99_processing_duration_ms"] == 125
+            assert summary["total_latency_sample_count"] == 1
+            assert summary["average_total_latency_ms"] == 625
+            assert summary["p90_total_latency_ms"] == 625
+            assert summary["p99_total_latency_ms"] == 625
             assert (await client.get("/health")).json() == {
                 "status": "ok",
                 "stored_events": 1,
@@ -42,6 +46,10 @@ def test_ingestion_queries_health_and_dashboard(
             dashboard = await client.get("/")
             assert dashboard.status_code == 200
             assert "SMS delivery metrics" in dashboard.text
+            assert "Overall delivery" in dashboard.text
+            assert "Sender service" in dashboard.text
+            assert "Average total latency" in dashboard.text
+            assert "Average sender processing duration" in dashboard.text
             assert "setInterval(refresh, 1000)" in dashboard.text
 
     asyncio.run(scenario())

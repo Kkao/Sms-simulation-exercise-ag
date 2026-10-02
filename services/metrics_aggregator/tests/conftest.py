@@ -19,5 +19,6 @@ def event() -> SenderResult:
         occurred_at=datetime(2026, 10, 1, 12, tzinfo=UTC),
         status="sent",
         processing_duration_ms=125,
+        total_latency_ms=625,
         error_code=None,
     )

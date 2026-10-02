@@ -39,5 +39,6 @@ def result(attempt: BrokerAttempt) -> SenderResult:
         occurred_at=attempt.dispatched_at,
         status="sent",
         processing_duration_ms=250,
+        total_latency_ms=500,
         error_code=None,
     )

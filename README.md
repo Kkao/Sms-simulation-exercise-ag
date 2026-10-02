@@ -144,7 +144,7 @@ the service is stopped to reset all metrics.
 | --- | --- |
 | `POST /metrics` | Validate and store a `SenderResult`; returns `202 accepted` or `200 duplicate` for an existing `event_id` |
 | `GET /metrics` | List newest events with `status`, `sender_id`, `limit` (1–1000), and `offset` filters |
-| `GET /metrics/summary` | Return sent, failed, failure rate, average, P90, and P99 processing time, sender count, and latest event time |
+| `GET /metrics/summary` | Return outcome totals, processing-time and total-latency statistics, sender count, and latest event time |
 | `GET /health` | Check API/database access and return the stored event count |
 | `GET /` | Display the live dashboard |
 
@@ -153,9 +153,10 @@ does not change totals, even if the later payload differs. Events are ordered by
 their UTC `occurred_at` timestamp and then event ID. The dashboard uses short
 polling, so live updates normally appear within one second.
 
-P90 and P99 use the nearest-rank definition: durations are sorted ascending and
-ranks `ceil(0.90 × event count)` and `ceil(0.99 × event count)` are selected. An
-empty data set reports zero milliseconds for both.
+P90 and P99 use the nearest-rank definition. Processing durations use every event.
+Total-latency statistics use only events that include `total_latency_ms`, allowing
+databases and clients from before that field was added to remain readable. When no
+latency samples exist, the total-latency average and percentiles are `null`.
 
 ## Run the sender
 
@@ -178,14 +179,6 @@ logged as JSON at INFO level.
 | `--timeout` | `5` | Positive finite total timeout per HTTP request |
 | `--metrics-retries` | `3` | Nonnegative number of retries after a transient metrics failure |
 | `--retry-delay` | `0.5` | Positive finite seconds between metrics retries |
-
-Worker IDs use the fixed prefix `sms-sender`: `sms-sender-1`, `sms-sender-2`, etc.
-IDs restart from one in each process, so they do not distinguish separate processes.
-All senders in a CLI process use the configured delay and failure rate. Each has
-one attempt in flight and its own random generator. Delivery is simulated only.
-Durations use a monotonic clock and include the actual wait; completion timestamps
-use UTC. Failed simulated sends emit
-`SIMULATED_SEND_FAILURE` and are not retried as new delivery attempts.
 
 Ctrl+C cancels workers, closes the HTTP pool, and exits with code 130. Logs identify
 known interrupted attempts. Claimed work may be lost,

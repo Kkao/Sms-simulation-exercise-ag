@@ -1,3 +1,4 @@
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import UUID
@@ -35,6 +36,10 @@ def test_persists_deduplicates_queries_and_reopens(
     assert summary.average_processing_duration_ms == 250
     assert summary.p90_processing_duration_ms == 375
     assert summary.p99_processing_duration_ms == 375
+    assert summary.total_latency_sample_count == 2
+    assert summary.average_total_latency_ms == 625
+    assert summary.p90_total_latency_ms == 625
+    assert summary.p99_total_latency_ms == 625
     assert summary.sender_count == 2
     reopened = MetricsRepository(path)
     assert reopened.count() == 2
@@ -47,6 +52,10 @@ def test_empty_summary(tmp_path: Path) -> None:
     assert summary.failure_rate == 0
     assert summary.p90_processing_duration_ms == 0
     assert summary.p99_processing_duration_ms == 0
+    assert summary.total_latency_sample_count == 0
+    assert summary.average_total_latency_ms is None
+    assert summary.p90_total_latency_ms is None
+    assert summary.p99_total_latency_ms is None
     assert summary.latest_occurred_at is None
 
 
@@ -94,3 +103,48 @@ def test_rejects_private_in_memory_database() -> None:
         assert "file-backed" in str(error)
     else:
         raise AssertionError("expected an explicit error for :memory:")
+
+
+def test_events_without_latency_remain_queryable(
+    tmp_path: Path, event: SenderResult
+) -> None:
+    repository = MetricsRepository(tmp_path / "legacy-event.sqlite3")
+    legacy_event = event.model_copy(update={"total_latency_ms": None})
+    assert repository.add(legacy_event) is True
+
+    items, total = repository.list()
+    assert total == 1
+    assert items == [legacy_event]
+    assert repository.summary().total_latency_sample_count == 0
+
+
+def test_existing_database_schema_is_migrated(
+    tmp_path: Path, event: SenderResult
+) -> None:
+    path = tmp_path / "pre-latency.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.execute(
+        """
+        CREATE TABLE metric_events (
+            event_id TEXT PRIMARY KEY,
+            schema_version INTEGER NOT NULL,
+            message_type TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            sender_id TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            processing_duration_ms REAL NOT NULL,
+            error_code TEXT
+        )
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    repository = MetricsRepository(path)
+    assert repository.add(event) is True
+    items, total = repository.list()
+    assert total == 1
+    assert items == [event]
