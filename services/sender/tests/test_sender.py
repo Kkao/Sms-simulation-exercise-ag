@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import random
 from datetime import UTC
 from unittest.mock import AsyncMock, Mock
@@ -91,6 +90,26 @@ def test_processing_error_retains_attempt_without_claiming_again(
         )
     assert caught.value.attempt == attempt
     claim.assert_awaited_once_with("s")
+
+
+def test_completed_attempt_is_reported_before_counting(
+    attempt: BrokerAttempt,
+    result: SenderResult,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        stop = asyncio.Event()
+        claim = AsyncMock(return_value=attempt)
+        report = AsyncMock(side_effect=lambda event: stop.set())
+        monkeypatch.setattr(
+            sender_module, "process_attempt", AsyncMock(return_value=result)
+        )
+        assert (
+            await run_sender("s", SenderConfig(), claim, report=report, stop=stop) == 1
+        )
+        report.assert_awaited_once_with(result)
+
+    asyncio.run(scenario())
 
 
 def test_concurrent_workers_have_distinct_ids_and_finish_inflight_on_error(

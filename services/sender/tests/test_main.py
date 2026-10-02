@@ -15,9 +15,9 @@ from services.sender import main as entrypoint
         ["--failure-rate", "2"],
         ["--mean-delay", "-1"],
         ["--sender-prefix", "custom"],
-        ["--metrics-url", "http://metrics/metrics"],
-        ["--metrics-retries", "3"],
-        ["--retry-delay", "1"],
+        ["--metrics-url", "file:///tmp/metrics"],
+        ["--metrics-retries", "-1"],
+        ["--retry-delay", "0"],
     ],
 )
 def test_cli_rejects_configuration_before_starting(
@@ -34,11 +34,26 @@ def test_cli_rejects_configuration_before_starting(
 def test_cli_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     run = AsyncMock(return_value=0)
     monkeypatch.setattr(entrypoint, "run", run)
-    entrypoint.main(["--sender-count", "2", "--mean-delay", "0", "--failure-rate", "1"])
+    entrypoint.main(
+        [
+            "--sender-count",
+            "2",
+            "--mean-delay",
+            "0",
+            "--failure-rate",
+            "1",
+            "--metrics-url",
+            "http://metrics/metrics",
+            "--metrics-retries",
+            "2",
+        ]
+    )
     config = run.await_args.args[0]
     assert config.sender_count == 2
     assert config.mean_delay == 0
     assert config.failure_rate == 1
+    assert str(config.metrics_url) == "http://metrics/metrics"
+    assert config.metrics_retries == 2
 
 
 @pytest.mark.parametrize(

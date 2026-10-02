@@ -14,7 +14,7 @@ async def run(config: SenderConfig) -> int:
     """Own the HTTP pool for the lifetime of all workers."""
     async with httpx.AsyncClient() as client:
         endpoints = SenderClient(client, config)
-        return await run_senders(config, endpoints.claim)
+        return await run_senders(config, endpoints.claim, report=endpoints.report)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -26,9 +26,12 @@ def main(argv: list[str] | None = None) -> None:
         "--poll-interval", type=float, default=0.1, help="Idle poll seconds"
     )
     parser.add_argument("--broker-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--metrics-url", default="http://127.0.0.1:8002/metrics")
     parser.add_argument(
         "--timeout", type=float, default=5.0, help="Seconds per request"
     )
+    parser.add_argument("--metrics-retries", type=int, default=3)
+    parser.add_argument("--retry-delay", type=float, default=0.5)
     try:
         config = SenderConfig(**vars(parser.parse_args(argv)))
     except ValidationError as error:

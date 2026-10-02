@@ -13,6 +13,7 @@ from shared import BrokerAttempt, SenderResult
 logger = logging.getLogger(__name__)
 SENDER_PREFIX = "sms-sender"
 Claim = Callable[[str], Awaitable[BrokerAttempt | None]]
+Report = Callable[[SenderResult], Awaitable[None]]
 
 
 async def process_attempt(
@@ -73,6 +74,7 @@ async def run_sender(
     config: SenderConfig,
     claim: Claim,
     *,
+    report: Report | None = None,
     stop: asyncio.Event,
 ) -> int:
     """Keep at most one attempt in flight; stop finishes any assigned attempt."""
@@ -87,6 +89,8 @@ async def run_sender(
                 await sleep(config.poll_interval)
                 continue
             result = await process_attempt(attempt, sender_id, config, rng=rng)
+            if report is not None:
+                await report(result)
             logger.info("Completed attempt: %s", result.model_dump_json())
             completed += 1
             attempt = None
@@ -106,6 +110,7 @@ async def run_senders(
     config: SenderConfig,
     claim: Claim,
     *,
+    report: Report | None = None,
     stop: asyncio.Event | None = None,
 ) -> int:
     """Run independent workers; on error stop claiming and drain other workers."""
@@ -118,6 +123,7 @@ async def run_senders(
                 f"{SENDER_PREFIX}-{index}",
                 config,
                 claim,
+                report=report,
                 stop=stop,
             )
         except SenderError as error:
